@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-
-import 'package:buffered_list_stream/buffered_list_stream.dart';
 import 'package:flutter/material.dart';
 import 'package:logging/logging.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:buffered_list_stream/buffered_list_stream.dart';
 import 'package:record/record.dart';
-import 'package:vosk_flutter/vosk_flutter.dart';
+import 'package:http/http.dart' as http;
 
 import 'frame_helper.dart';
 import 'simple_frame_app.dart';
@@ -22,8 +22,13 @@ class MainApp extends StatefulWidget {
   MainAppState createState() => MainAppState();
 }
 
-/// SimpleFrameAppState mixin helps to manage the lifecycle of the Frame connection outside of this file
 class MainAppState extends State<MainApp> with SimpleFrameAppState {
+  late stt.SpeechToText _speechToText;
+  bool _isAvailable = false;
+  bool _isListening = false;
+  String _partialResult = "N/A";
+  String _finalResult = "N/A";
+  static const _textStyle = TextStyle(fontSize: 30);
 
   MainAppState() {
     Logger.root.level = Level.INFO;
@@ -32,87 +37,144 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
     });
   }
 
-  /// speech to text application members
-  static const _modelName = 'vosk-model-small-en-us-0.15.zip';
-  final _vosk = VoskFlutterPlugin.instance();
-  late final Model _model;
-  late final Recognizer _recognizer;
-  static const _sampleRate = 16000;
-
-  String _partialResult = "N/A";
-  String _finalResult = "N/A";
-  static const _textStyle = TextStyle(fontSize: 30);
-
   @override
   void initState() {
     super.initState();
+    _speechToText = stt.SpeechToText();
     currentState = ApplicationState.initializing;
-    // asynchronously kick off Vosk initialization
-    _initVosk();
+    _initSpeechRecognition();
   }
 
   @override
-  void dispose() async {
-    _model.dispose();
-    _recognizer.dispose();
+  void dispose() {
     super.dispose();
   }
 
-  void _initVosk() async {
-    final enSmallModelPath = await ModelLoader().loadFromAssets('assets/$_modelName');
-    _model = await _vosk.createModel(enSmallModelPath);
-    _recognizer = await _vosk.createRecognizer(model: _model, sampleRate: _sampleRate);
-
+  void _initSpeechRecognition() async {
+    _isAvailable = await _speechToText.initialize(
+      onStatus: (status) {
+        if (status == 'done' || status == 'notListening') {
+          _isListening = false;
+          setState(() {});
+          _restartListening(); // Automatically restart when the status is 'done' or 'notListening'
+        }
+      },
+      onError: (error) {
+        _log.severe('Speech Recognition Error: $error');
+      },
+    );
     currentState = ApplicationState.disconnected;
     if (mounted) setState(() {});
   }
 
-  /// Sets up the Audio used for the application.
-  /// Returns true if the audio is set up correctly, in which case
-  /// it also returns a reference to the AudioRecorder and the
-  /// audioSampleBufferedStream
-  Future<(bool, AudioRecorder?, Stream<List<int>>?)> startAudio() async {
-    // create a fresh AudioRecorder each time we run - it will be dispose()d when we click stop
-    AudioRecorder audioRecorder = AudioRecorder();
+  void _startListening() async {
+    if (_isAvailable && !_isListening) {
+      _finalResult = '';
+      _partialResult = '';
+      setState(() {});
 
-    // Check and request permission if needed
-    if (!await audioRecorder.hasPermission()) {
-      return (false, null, null);
-    }
-
-    try {
-      // start the audio stream
-      // TODO select suitable sample rate for the Frame given BLE bandwidth constraints if we want to switch to Frame mic
-      final recordStream = await audioRecorder.startStream(
-        const RecordConfig(encoder: AudioEncoder.pcm16bits,
-          numChannels: 1,
-          sampleRate: _sampleRate));
-
-      // buffer the audio stream into chunks of 4096 samples
-      final audioSampleBufferedStream = bufferedListStream(
-        recordStream.map((event) {
-          return event.toList();
-        }),
-        // samples are PCM16, so 2 bytes per sample
-        4096 * 2,
+      await _speechToText.listen(
+        onResult: (result) {
+          setState(() {
+            _partialResult = result.recognizedWords;
+            if (result.finalResult) {
+              _finalResult = _partialResult;
+              _partialResult = '';
+              _sendTextToFrame(_finalResult);  // Text wird an Frame gesendet
+            }
+          });
+        },
       );
-
-      return (true, audioRecorder, audioSampleBufferedStream);
-    } catch (e) {
-      _log.severe('Error starting Audio: $e');
-      return (false, null, null);
+      _isListening = true;
+      setState(() {});
     }
   }
 
-  Future<void> stopAudio(AudioRecorder recorder) async {
-    // stop the audio
-    await recorder.stop();
-    await recorder.dispose();
+  void _stopListening() async {
+    if (_isListening) {
+      await _speechToText.stop();
+      _isListening = false;
+      setState(() {});
+    }
   }
 
-  /// This application uses vosk speech-to-text to listen to audio from the host mic, convert to text,
-  /// and send the text to the Frame in real-time. It has a running main loop in this function
-  /// and also on the Frame (frame_app.lua)
+  void _restartListening() async {
+    // Restart the listening process automatically when stopped
+    if (!_isListening) {
+      Future.delayed(const Duration(seconds: 1), () {
+        _startListening();
+      });
+    }
+  }
+
+
+// Function to translate text using LibreTranslate API
+Future<String> translateText(String text, String sourceLang, String targetLang) async {
+  try {
+    var url = Uri.parse('URL-TO-LIBRETRANSLATE/translate');
+    var response = await http.post(url, headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    }, body: {
+      'q': text,
+      'source': sourceLang,
+      'target': targetLang,
+      'format': 'text',
+      'api_key': 'LIBRETRANSLATE-API-KEY',
+    });
+
+    if (response.statusCode == 200) {
+      var data = jsonDecode(response.body);
+      return data['translatedText'];
+    } else {
+      _log.severe('Failed to translate text: ${response.body}');
+      return text;  // Return original text if translation fails
+    }
+  } catch (e) {
+    _log.severe('Error translating text: $e');
+    return text;
+  }
+}
+
+
+
+void _sendTextToFrame(String text) async {
+  if (text.isNotEmpty) {
+    try {
+      // Translate the text before sending to the frame
+      String translatedText = await translateText(text, 'de', 'it');  // Example: Translating from German to Italian
+
+      // Wrap the translated text to send it in chunks
+      String wrappedText = FrameHelper.wrapText(translatedText, 640, 4);
+
+      int sentBytes = 0;
+      int bytesRemaining = wrappedText.length;
+      int chunksize = frame!.maxDataLength! - 1;
+      List<int> bytes;
+
+      while (sentBytes < wrappedText.length) {
+        if (bytesRemaining <= chunksize) {
+          // Final chunk
+          bytes = [0x0b] + wrappedText.substring(sentBytes, sentBytes + bytesRemaining).codeUnits;
+        } else {
+          // Non-final chunk
+          bytes = [0x0a] + wrappedText.substring(sentBytes, sentBytes + chunksize).codeUnits;
+        }
+
+        // Send the chunk
+        frame!.sendData(bytes);
+
+        sentBytes += bytes.length;
+        bytesRemaining = wrappedText.length - sentBytes;
+      }
+    } catch (e) {
+      _log.severe('Error sending translated text to Frame: $e');
+    }
+  }
+}
+
+
+
+
   @override
   Future<void> run() async {
     currentState = ApplicationState.running;
@@ -120,113 +182,12 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
     _finalResult = '';
     if (mounted) setState(() {});
 
-    try {
-      var (ok, audioRecorder, audioSampleBufferedStream) = await startAudio();
-      if (!ok) {
-        currentState = ApplicationState.ready;
-        if (mounted) setState(() {});
-        return;
-      }
-
-      String prevText = '';
-
-      // loop over the incoming audio data and send reults to Frame
-      await for (var audioSample in audioSampleBufferedStream!) {
-        // if the user has clicked Stop we want to jump out of the main loop and stop processing
-        if (currentState != ApplicationState.running) {
-          break;
-        }
-
-        // recognizer blocks until it has something
-        final resultReady = await _recognizer.acceptWaveformBytes(Uint8List.fromList(audioSample));
-
-        // TODO consider enabling alternatives, and word times, and ...?
-        String text = resultReady ?
-            jsonDecode(await _recognizer.getResult())['text']
-          : jsonDecode(await _recognizer.getPartialResult())['partial'];
-
-        // If the text is the same as the previous one, we don't send it to Frame and force a redraw
-        // The recognizer often produces a bunch of empty string in a row too, so this means
-        // we send the first one (clears the display) but not subsequent ones
-        // Often the final result matches the last partial, so if it's a final result then show it
-        // on the phone but don't send it
-        if (text == prevText) {
-          if (resultReady) {
-            setState(() { _finalResult = text; _partialResult = ''; });
-          }
-          continue;
-        }
-        else if (text.isEmpty) {
-          // turn the empty string into a single space and send
-          // still can't put it through the wrapped-text-chunked-sender
-          // because it will be zero bytes payload so no message will
-          // be sent.
-          // Users might say this first empty partial
-          // comes a bit soon and hence the display is cleared a little sooner
-          // than they want (not like audio hangs around in the air though
-          // after words are spoken!)
-          frame!.sendData([0x0b, 0x20]);
-          prevText = '';
-          continue;
-        }
-
-        if (_log.isLoggable(Level.FINE)) {
-          _log.fine('Recognized text: $text');
-        }
-
-        // sentence fragments can be longer than MTU (200-ish bytes) so we introduce a header
-        // byte to indicate if this is a non-final chunk or a final chunk, which is interpreted
-        // on the other end in frame_app
-        try {
-          // send current text to Frame, splitting into "longText"-marked chunks if required
-          String wrappedText = FrameHelper.wrapText(text, 640, 4);
-
-          int sentBytes = 0;
-          int bytesRemaining = wrappedText.length;
-          int chunksize = frame!.maxDataLength! - 1;
-          List<int> bytes;
-
-          while (sentBytes < wrappedText.length) {
-            if (bytesRemaining <= chunksize) {
-              // final chunk
-              bytes = [0x0b] + wrappedText.substring(sentBytes, sentBytes + bytesRemaining).codeUnits;
-            }
-            else {
-              // non-final chunk
-              bytes = [0x0a] + wrappedText.substring(sentBytes, sentBytes + chunksize).codeUnits;
-            }
-
-            // send the chunk
-            frame!.sendData(bytes);
-
-            sentBytes += bytes.length;
-            bytesRemaining = wrappedText.length - sentBytes;
-          }
-        }
-        catch (e) {
-          _log.severe('Error sending text to Frame: $e');
-          break;
-        }
-
-        // update the phone UI too
-        setState(() => resultReady ? _finalResult = text : _partialResult = text);
-        prevText = text;
-      }
-
-      await stopAudio(audioRecorder!);
-
-    } catch (e) {
-      _log.fine('Error executing application logic: $e');
-    }
-
-    currentState = ApplicationState.ready;
-    if (mounted) setState(() {});
+    _startListening();
   }
 
-  /// The run() function will keep running until we interrupt it here
-  /// and it will stop listening to audio
   @override
   Future<void> cancel() async {
+    _stopListening();
     currentState = ApplicationState.ready;
     if (mounted) setState(() {});
   }
@@ -239,7 +200,7 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
       home: Scaffold(
         appBar: AppBar(
           title: const Text("Frame Speech-to-Text"),
-          actions: [getBatteryWidget()]
+          actions: [getBatteryWidget()],
         ),
         body: Center(
           child: Container(
@@ -258,7 +219,10 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
             ),
           ),
         ),
-        floatingActionButton: getFloatingActionButtonWidget(const Icon(Icons.mic), const Icon(Icons.mic_off)),
+        floatingActionButton: getFloatingActionButtonWidget(
+          const Icon(Icons.mic),
+          const Icon(Icons.mic_off),
+        ),
         persistentFooterButtons: getFooterButtonsWidget(),
       ),
     );
