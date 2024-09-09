@@ -56,13 +56,19 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
         if (status == 'done' || status == 'notListening') {
           _isListening = false;
           setState(() {});
-          _restartListening(); // Automatically restart when the status is 'done' or 'notListening'
+          _restartListening();
         }
       },
       onError: (error) {
         _log.severe('Speech Recognition Error: $error');
       },
     );
+
+    var availableLocales = await _speechToText.locales();
+    for (var locale in availableLocales) {
+      _log.info('Available locale: ${locale.localeId} - ${locale.name}');
+    }
+
     currentState = ApplicationState.disconnected;
     if (mounted) setState(() {});
   }
@@ -77,13 +83,20 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
         onResult: (result) {
           setState(() {
             _partialResult = result.recognizedWords;
+
+            // Zeige den Text sofort auf dem Frame an
+            _sendTextToFrame(_partialResult);
+
             if (result.finalResult) {
               _finalResult = _partialResult;
               _partialResult = '';
-              _sendTextToFrame(_finalResult);  // Text wird an Frame gesendet
+
+              // Starte die Übersetzung parallel
+              _translateAndSendTextToFrame(_finalResult);
             }
           });
         },
+        localeId: 'de',  // Italienische Spracheingabe
       );
       _isListening = true;
       setState(() {});
@@ -99,7 +112,6 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
   }
 
   void _restartListening() async {
-    // Restart the listening process automatically when stopped
     if (!_isListening) {
       Future.delayed(const Duration(seconds: 1), () {
         _startListening();
@@ -107,73 +119,78 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
     }
   }
 
+  Future<void> _sendTextToFrame(String text) async {
+    if (text.isNotEmpty) {
+      try {
+        // Text wird sofort auf dem Frame angezeigt
+        String wrappedText = FrameHelper.wrapText(text, 640, 4);
 
-// Function to translate text using LibreTranslate API
-Future<String> translateText(String text, String sourceLang, String targetLang) async {
-  try {
-    var url = Uri.parse('URL-TO-LIBRETRANSLATE/translate');
-    var response = await http.post(url, headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    }, body: {
-      'q': text,
-      'source': sourceLang,
-      'target': targetLang,
-      'format': 'text',
-      'api_key': 'LIBRETRANSLATE-API-KEY',
-    });
+        int sentBytes = 0;
+        int bytesRemaining = wrappedText.length;
+        int chunksize = frame!.maxDataLength! - 1;
+        List<int> bytes;
 
-    if (response.statusCode == 200) {
-      var data = jsonDecode(response.body);
-      return data['translatedText'];
-    } else {
-      _log.severe('Failed to translate text: ${response.body}');
-      return text;  // Return original text if translation fails
-    }
-  } catch (e) {
-    _log.severe('Error translating text: $e');
-    return text;
-  }
-}
+        while (sentBytes < wrappedText.length) {
+          if (bytesRemaining <= chunksize) {
+            bytes = [0x0b] + wrappedText.substring(sentBytes, sentBytes + bytesRemaining).codeUnits;
+          } else {
+            bytes = [0x0a] + wrappedText.substring(sentBytes, sentBytes + chunksize).codeUnits;
+          }
 
-
-
-void _sendTextToFrame(String text) async {
-  if (text.isNotEmpty) {
-    try {
-      // Translate the text before sending to the frame
-      String translatedText = await translateText(text, 'de', 'it');  // Example: Translating from German to Italian
-
-      // Wrap the translated text to send it in chunks
-      String wrappedText = FrameHelper.wrapText(translatedText, 640, 4);
-
-      int sentBytes = 0;
-      int bytesRemaining = wrappedText.length;
-      int chunksize = frame!.maxDataLength! - 1;
-      List<int> bytes;
-
-      while (sentBytes < wrappedText.length) {
-        if (bytesRemaining <= chunksize) {
-          // Final chunk
-          bytes = [0x0b] + wrappedText.substring(sentBytes, sentBytes + bytesRemaining).codeUnits;
-        } else {
-          // Non-final chunk
-          bytes = [0x0a] + wrappedText.substring(sentBytes, sentBytes + chunksize).codeUnits;
+          frame!.sendData(bytes);
+          sentBytes += bytes.length;
+          bytesRemaining = wrappedText.length - sentBytes;
         }
+      } catch (e) {
+        _log.severe('Fehler beim Senden des Textes an das Frame: $e');
+      }
+    }
+  }
 
-        // Send the chunk
-        frame!.sendData(bytes);
+  void _translateAndSendTextToFrame(String text) async {
+    if (text.isNotEmpty) {
+      try {
+        String sourceLang = 'de';
+        String targetLang = 'it';
 
-        sentBytes += bytes.length;
-        bytesRemaining = wrappedText.length - sentBytes;
+        String translatedText = await translateText(text, sourceLang, targetLang);
+
+        // Sobald die Übersetzung da ist, aktualisiere das Frame
+        _log.info('Sending translated text to frame: $translatedText');
+        _sendTextToFrame(translatedText);
+
+      } catch (e) {
+        _log.severe('Fehler beim Senden des übersetzten Textes an das Frame: $e');
+      }
+    }
+  }
+
+  Future<String> translateText(String text, String sourceLang, String targetLang) async {
+    try {
+      var url = Uri.parse('LIBRETRANSLATE_URL/translate');
+      var response = await http.post(url, headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      }, body: {
+        'q': text,
+        'source': 'de',  // Quellsprache ist Deutsch
+        'target': 'it',  // Zielsprache ist Italienisch
+        'format': 'text',
+        'api_key': 'LIBRETRANSLATE-API-KEY',
+      });
+
+      if (response.statusCode == 200) {
+        var data = jsonDecode(response.body);
+        _log.info('Translation successful: ${data['translatedText']}');
+        return data['translatedText'];
+      } else {
+        _log.severe('Failed to translate text: ${response.body}');
+        return text;
       }
     } catch (e) {
-      _log.severe('Error sending translated text to Frame: $e');
+      _log.severe('Error translating text: $e');
+      return text;
     }
   }
-}
-
-
-
 
   @override
   Future<void> run() async {
