@@ -1,4 +1,4 @@
-name: frame_Translate_DE_IT
+name: frame_Translate_IT_DE
 description: "Connects to Frame and streams audio from its microphone, which is sent through a local (on Host device) vosk speech-to-text engine, and displays the streaming text on the Frame display."
 publish_to: 'none'
 version: 0.1.0
@@ -15,7 +15,8 @@ dependencies:
   logging: ^1.2.0
   speech_to_text: ^6.6.2  # or latest version
   http: ^0.13.3
-
+  flutter_foreground_task: ^3.10.0
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter
