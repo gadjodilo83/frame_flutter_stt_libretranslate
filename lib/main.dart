@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -30,6 +29,10 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
   String _partialResult = "N/A";
   String _finalResult = "N/A";
   static const _textStyle = TextStyle(fontSize: 30);
+  String _selectedInputLanguage = 'it'; // Standard-Sprache für Speech-to-Text
+  String _selectedTargetLanguage = 'de'; // Standard-Zielsprache für Übersetzung
+
+  final List<String> _languages = ['en', 'de', 'it', 'fr'];
 
   MainAppState() {
     Logger.root.level = Level.INFO;
@@ -97,7 +100,7 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
             }
           });
         },
-        localeId: 'auto',  // Automatische Erkennung der Spracheingabe
+        localeId: _selectedInputLanguage,  // Verwende die gewählte Eingabesprache
       );
       _isListening = true;
       setState(() {});
@@ -112,17 +115,15 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
     }
   }
 
-void _restartListening() {
-  if (!_isListening) {
-    _startListening();  // Sofort wieder starten, ohne Verzögerung
+  void _restartListening() {
+    if (!_isListening) {
+      _startListening();  // Sofort wieder starten, ohne Verzögerung
+    }
   }
-}
-
 
   Future<void> _sendTextToFrame(String text) async {
     if (text.isNotEmpty) {
       try {
-        // Text wird sofort auf dem Frame angezeigt
         String wrappedText = FrameHelper.wrapText(text, 640, 4);
 
         int sentBytes = 0;
@@ -150,10 +151,7 @@ void _restartListening() {
   void _translateAndSendTextToFrame(String text) async {
     if (text.isNotEmpty) {
       try {
-        String sourceLang = 'auto';
-        String targetLang = 'de';
-
-        String translatedText = await translateText(text, sourceLang, targetLang);
+        String translatedText = await translateText(text, _selectedInputLanguage, _selectedTargetLanguage);
 
         // Sobald die Übersetzung da ist, aktualisiere das Frame
         _log.info('Sending translated text to frame: $translatedText');
@@ -167,15 +165,15 @@ void _restartListening() {
 
   Future<String> translateText(String text, String sourceLang, String targetLang) async {
     try {
-      var url = Uri.parse('INSERT-LIBRETRANSLATE-URL/translate');
+      var url = Uri.parse('URL_TO_LIBRETRANSLATE/translate');
       var response = await http.post(url, headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       }, body: {
         'q': text,
-        'source': 'auto',  // Quellsprache automatisch erkennen
-        'target': 'de',  // Zielsprache ist Italienisch
+        'source': sourceLang,
+        'target': targetLang,
         'format': 'text',
-        'api_key': 'INSERT-API-KEY',
+        'api_key': 'API_KEY_FOR_LIBRETRANSLATE',
       });
 
       if (response.statusCode == 200) {
@@ -225,12 +223,50 @@ void _restartListening() {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Align(alignment: Alignment.centerLeft,
-                  child: Text('Partial: $_partialResult', style: _textStyle)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Partial: $_partialResult', style: _textStyle),
                 ),
                 const Divider(),
-                Align(alignment: Alignment.centerLeft,
-                  child: Text('Final: $_finalResult', style: _textStyle)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Final: $_finalResult', style: _textStyle),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    DropdownButton<String>(
+                      value: _selectedInputLanguage,
+                      items: _languages
+                          .map((lang) => DropdownMenuItem<String>(
+                                value: lang,
+                                child: Text(lang.toUpperCase()),
+                              ))
+                          .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedInputLanguage = value!;
+                        });
+                      },
+                      hint: const Text("Input Language"),
+                    ),
+                    DropdownButton<String>(
+                      value: _selectedTargetLanguage,
+                      items: _languages
+                          .map((lang) => DropdownMenuItem<String>(
+                                value: lang,
+                                child: Text(lang.toUpperCase()),
+                              ))
+                          .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _selectedTargetLanguage = value!;
+                        });
+                      },
+                      hint: const Text("Target Language"),
+                    ),
+                  ],
                 ),
               ],
             ),
