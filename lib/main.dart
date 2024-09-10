@@ -112,13 +112,12 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
     }
   }
 
-  void _restartListening() async {
-    if (!_isListening) {
-      Future.delayed(const Duration(seconds: 1), () {
-        _startListening();
-      });
-    }
+void _restartListening() {
+  if (!_isListening) {
+    _startListening();  // Sofort wieder starten, ohne Verzögerung
   }
+}
+
 
   Future<void> _sendTextToFrame(String text) async {
     if (text.isNotEmpty) {
@@ -151,8 +150,8 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
   void _translateAndSendTextToFrame(String text) async {
     if (text.isNotEmpty) {
       try {
-        String sourceLang = 'auto'; // Automatische Erkennung der Spracheingabe
-        String targetLang = 'it';  // Definiere die Target-Sprache
+        String sourceLang = 'auto';
+        String targetLang = 'de';
 
         String translatedText = await translateText(text, sourceLang, targetLang);
 
@@ -168,15 +167,15 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
 
   Future<String> translateText(String text, String sourceLang, String targetLang) async {
     try {
-      var url = Uri.parse('URL-TO-LIBRETRANSLATE/translate');
+      var url = Uri.parse('INSERT-LIBRETRANSLATE-URL/translate');
       var response = await http.post(url, headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       }, body: {
         'q': text,
         'source': 'auto',  // Quellsprache automatisch erkennen
-        'target': 'it',  // Zielsprache ist Italienisch
+        'target': 'de',  // Zielsprache ist Italienisch
         'format': 'text',
-        'api_key': 'API-KEY-LIBRETRANSLATE',
+        'api_key': 'INSERT-API-KEY',
       });
 
       if (response.statusCode == 200) {
