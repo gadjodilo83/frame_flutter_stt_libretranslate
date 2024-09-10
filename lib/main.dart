@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -96,7 +97,7 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
             }
           });
         },
-        localeId: 'de',  // Italienische Spracheingabe
+        localeId: 'auto',  // Automatische Erkennung der Spracheingabe
       );
       _isListening = true;
       setState(() {});
@@ -150,7 +151,7 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
   void _translateAndSendTextToFrame(String text) async {
     if (text.isNotEmpty) {
       try {
-        String sourceLang = 'de';
+        String sourceLang = 'auto';
         String targetLang = 'it';
 
         String translatedText = await translateText(text, sourceLang, targetLang);
@@ -167,15 +168,15 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
 
   Future<String> translateText(String text, String sourceLang, String targetLang) async {
     try {
-      var url = Uri.parse('LIBRETRANSLATE_URL/translate');
+      var url = Uri.parse('URL-TO-LIBRETRANSLATE/translate');
       var response = await http.post(url, headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       }, body: {
         'q': text,
-        'source': 'de',  // Quellsprache ist Deutsch
+        'source': 'auto',  // Quellsprache automatisch erkennen
         'target': 'it',  // Zielsprache ist Italienisch
         'format': 'text',
-        'api_key': 'LIBRETRANSLATE-API-KEY',
+        'api_key': 'API-KEY-LIBRETRANSLATE',
       });
 
       if (response.statusCode == 200) {
