@@ -151,8 +151,8 @@ class MainAppState extends State<MainApp> with SimpleFrameAppState {
   void _translateAndSendTextToFrame(String text) async {
     if (text.isNotEmpty) {
       try {
-        String sourceLang = 'auto';
-        String targetLang = 'it';
+        String sourceLang = 'auto'; // Automatische Erkennung der Spracheingabe
+        String targetLang = 'it';  // Definiere die Target-Sprache
 
         String translatedText = await translateText(text, sourceLang, targetLang);
 
